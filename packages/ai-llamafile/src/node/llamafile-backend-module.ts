@@ -13,13 +13,20 @@
 //
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
-export * from './chat-agents';
-export * from './chat-agent-service';
-export * from './chat-model';
-export * from './chat-request-parser';
-export * from './chat-service';
-export * from './command-chat-agents';
-export * from './custom-chat-agent';
-export * from './parsed-chat-request';
-export * from './orchestrator-chat-agent';
-export * from './universal-chat-agent';
+
+import { ContainerModule } from '@theia/core/shared/inversify';
+import { LlamafileManagerImpl } from './llamafile-manager-impl';
+import { LlamafileManager, LlamafileServerManagerClient, LlamafileManagerPath } from '../common/llamafile-manager';
+import { ConnectionHandler, RpcConnectionHandler } from '@theia/core';
+
+export default new ContainerModule(bind => {
+    bind(LlamafileManager).to(LlamafileManagerImpl).inSingletonScope();
+    bind(ConnectionHandler).toDynamicValue(ctx => new RpcConnectionHandler<LlamafileServerManagerClient>(
+        LlamafileManagerPath,
+        client => {
+            const service = ctx.container.get<LlamafileManager>(LlamafileManager);
+            service.setClient(client);
+            return service;
+        }
+    )).inSingletonScope();
+});
