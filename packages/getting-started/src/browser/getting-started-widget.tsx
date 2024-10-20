@@ -14,7 +14,7 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { codicon, CommonCommands, Key, KeyCode, LabelProvider, Message, PreferenceService, ReactWidget } from '@theia/core/lib/browser';
+import { codicon, CommonCommands, Key, KeyCode, LabelProvider, Message, ReactWidget } from '@theia/core/lib/browser';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
 import { CommandRegistry, environment, isOSX, Path } from '@theia/core/lib/common';
@@ -26,16 +26,15 @@ import { inject, injectable, postConstruct } from '@theia/core/shared/inversify'
 import * as React from '@theia/core/shared/react';
 import { KeymapsCommands } from '@theia/keymaps/lib/browser';
 import { WorkspaceCommands, WorkspaceService } from '@theia/workspace/lib/browser';
-
+import { FileDialogService } from '@theia/filesystem/lib/browser';
+import { anchorTomlContent, cargoTomlContent, programRsContent, testTsContent } from './skeleton-content';
 /**
  * Default implementation of the `GettingStartedWidget`.
  * The widget is displayed when there are currently no workspaces present.
  * Some of the features displayed include:
- * - `open` commands.
- * - `recently used workspaces`.
+ * - `start smart contract` commands.
+ * - `recently accessed smart contracts`.
  * - `settings` commands.
- * - `help` commands.
- * - helpful links.
  */
 @injectable()
 export class GettingStartedWidget extends ReactWidget {
@@ -79,12 +78,14 @@ export class GettingStartedWidget extends ReactWidget {
     /**
      * Collection of useful links to display for end users.
      */
-    protected readonly documentationUrl = 'https://www.theia-ide.org/docs/';
-    protected readonly compatibilityUrl = 'https://eclipse-theia.github.io/vscode-theia-comparator/status.html';
-    protected readonly extensionUrl = 'https://www.theia-ide.org/docs/authoring_extensions';
-    protected readonly pluginUrl = 'https://www.theia-ide.org/docs/authoring_plugins';
     protected readonly theiaAIDocUrl = 'https://theia-ide.org/docs/user_ai/';
     protected readonly ghProjectUrl = 'https://github.com/eclipse-theia/theia/issues/new/choose';
+
+    protected projectName: string = '';
+    protected blockchain: string = '';
+    protected language: string = '';
+    protected isDialogOpen: boolean = false;
+    protected path: string = 'C:';
 
     @inject(ApplicationServer)
     protected readonly appServer: ApplicationServer;
@@ -104,8 +105,8 @@ export class GettingStartedWidget extends ReactWidget {
     @inject(WorkspaceService)
     protected readonly workspaceService: WorkspaceService;
 
-    @inject(PreferenceService)
-    protected readonly preferenceService: PreferenceService;
+    @inject(FileDialogService)
+    protected readonly fileDialogService: FileDialogService;
 
     @postConstruct()
     protected init(): void {
@@ -165,17 +166,13 @@ export class GettingStartedWidget extends ReactWidget {
                 </div>
                 <div className='flex-grid'>
                     <div className='col'>
-                        {this.renderHelp()}
-                    </div>
-                </div>
-                <div className='flex-grid'>
-                    <div className='col'>
                         {this.renderVersion()}
                     </div>
                 </div>
             </div>
-            <div className='gs-preference-container'>
-                {this.renderPreferences()}
+
+            <div style={{ position: 'absolute', top: 10, left: 10 }}>
+                {this.isDialogOpen && this.renderDialogBox()}
             </div>
         </div>;
     }
@@ -197,33 +194,14 @@ export class GettingStartedWidget extends ReactWidget {
     protected renderStart(): React.ReactNode {
         const requireSingleOpen = isOSX || !environment.electron.is();
 
-        const createFile = <div className='gs-action-container'>
+        const createProject = <div className='gs-action-container'>
             <a
                 role={'button'}
                 tabIndex={0}
-                onClick={this.doCreateFile}
-                onKeyDown={this.doCreateFileEnter}>
-                {CommonCommands.NEW_UNTITLED_FILE.label ?? nls.localizeByDefault('New File...')}
-            </a>
-        </div>;
-
-        const open = requireSingleOpen && <div className='gs-action-container'>
-            <a
-                role={'button'}
-                tabIndex={0}
-                onClick={this.doOpen}
-                onKeyDown={this.doOpenEnter}>
-                {nls.localizeByDefault('Open')}
-            </a>
-        </div>;
-
-        const openFile = !requireSingleOpen && <div className='gs-action-container'>
-            <a
-                role={'button'}
-                tabIndex={0}
-                onClick={this.doOpenFile}
-                onKeyDown={this.doOpenFileEnter}>
-                {nls.localizeByDefault('Open File')}
+                onClick={this.toggleDialog}
+                onKeyDown={this.toggleDialogEnter}>
+                {/* {CommonCommands.NEW_UNTITLED_FILE.label ?? nls.localizeByDefault('New File...')} */}
+                New Smart Contract
             </a>
         </div>;
 
@@ -237,23 +215,21 @@ export class GettingStartedWidget extends ReactWidget {
             </a>
         </div>;
 
-        const openWorkspace = (
+        const importFromGit = !requireSingleOpen && <div className='gs-action-container'>
             <a
                 role={'button'}
                 tabIndex={0}
-                onClick={this.doOpenWorkspace}
-                onKeyDown={this.doOpenWorkspaceEnter}>
-                {nls.localizeByDefault('Open Workspace')}
+                onClick={this.doOpenFromGit}
+                onKeyDown={this.doOpenFromGitEnter}>
+                Import From Git
             </a>
-        );
+        </div>;
 
         return <div className='gs-section'>
             <h3 className='gs-section-header'><i className={codicon('folder-opened')}></i>{nls.localizeByDefault('Start')}</h3>
-            {createFile}
-            {open}
-            {openFile}
+            {createProject}
             {openFolder}
-            {openWorkspace}
+            {importFromGit}
         </div>;
     }
 
@@ -289,7 +265,7 @@ export class GettingStartedWidget extends ReactWidget {
         </div>;
         return <div className='gs-section'>
             <h3 className='gs-section-header'>
-                <i className={codicon('history')}></i>{nls.localizeByDefault('Recent')}
+                <i className={codicon('history')}></i>Recently Opened Smart Contracts
             </h3>
             {items.length > 0 ? content : <p className='gs-no-recent'>
                 {nls.localizeByDefault('You have no recent folders,') + ' '}
@@ -336,55 +312,6 @@ export class GettingStartedWidget extends ReactWidget {
             </div>
         </div>;
     }
-
-    /**
-     * Render the help section.
-     */
-    protected renderHelp(): React.ReactNode {
-        return <div className='gs-section'>
-            <h3 className='gs-section-header'>
-                <i className={codicon('question')}></i>
-                {nls.localizeByDefault('Help')}
-            </h3>
-            <div className='gs-action-container'>
-                <a
-                    role={'button'}
-                    tabIndex={0}
-                    onClick={() => this.doOpenExternalLink(this.documentationUrl)}
-                    onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.documentationUrl)}>
-                    {nls.localizeByDefault('Documentation')}
-                </a>
-            </div>
-            <div className='gs-action-container'>
-                <a
-                    role={'button'}
-                    tabIndex={0}
-                    onClick={() => this.doOpenExternalLink(this.compatibilityUrl)}
-                    onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.compatibilityUrl)}>
-                    {nls.localize('theia/getting-started/apiComparator', '{0} API Compatibility', 'VS Code')}
-                </a>
-            </div>
-            <div className='gs-action-container'>
-                <a
-                    role={'button'}
-                    tabIndex={0}
-                    onClick={() => this.doOpenExternalLink(this.extensionUrl)}
-                    onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.extensionUrl)}>
-                    {nls.localize('theia/getting-started/newExtension', 'Building a New Extension')}
-                </a>
-            </div>
-            <div className='gs-action-container'>
-                <a
-                    role={'button'}
-                    tabIndex={0}
-                    onClick={() => this.doOpenExternalLink(this.pluginUrl)}
-                    onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.pluginUrl)}>
-                    {nls.localize('theia/getting-started/newPlugin', 'Building a New Plugin')}
-                </a>
-            </div>
-        </div>;
-    }
-
     /**
      * Render the version section.
      */
@@ -398,15 +325,12 @@ export class GettingStartedWidget extends ReactWidget {
         </div>;
     }
 
-    protected renderPreferences(): React.ReactNode {
-        return <WelcomePreferences preferenceService={this.preferenceService}></WelcomePreferences>;
-    }
-
+    // Todo: We will have something like a tutorial or guide here
     protected renderAIBanner(): React.ReactNode {
         return <div className='gs-container gs-experimental-container'>
             <div className='flex-grid'>
                 <div className='col'>
-                    <h3 className='gs-section-header'> 🚀 AI Support in the Theia IDE is available! [Experimental] ✨</h3>
+                    <h3 className='gs-section-header'> Get Started with Limix AI IDE 🚀  </h3>
                     <br />
                     <div className='gs-action-container'>
                         Theia IDE now contains experimental AI support, which offers early access to cutting-edge AI capabilities within your IDE.
@@ -455,6 +379,81 @@ export class GettingStartedWidget extends ReactWidget {
         </div>;
     }
 
+    protected renderDialogBox(): React.ReactNode {
+        // Define a condition to check if all required fields are filled
+        const isCreateButtonDisabled = !this.projectName || !this.blockchain || !this.language;
+        return (
+            <div className='dialog-overlay'>
+                <div className='dialog-box'>
+                    <div className='dialog-title'>
+                        <h3>Select Project Configurations</h3>
+                    </div>
+                    <form className='dialog-form'>
+                        <label>
+                            Project Name:
+                            <input
+                                type='text'
+                                value={this.projectName}
+                                onChange={e => this.handleInputChange('projectName', e.target.value)}
+                            />
+                        </label>
+                        <label>
+                            Blockchain:
+                            <select value={this.blockchain} onChange={e => this.handleInputChange('blockchain', e.target.value)}>
+                                <option value=''>Select Blockchain</option>
+                                <option value='Ethereum'>Ethereum</option>
+                                <option value='Solana'>Solana</option>
+                            </select>
+                        </label>
+                        <label>
+                            Language:
+                            <select value={this.language} onChange={e => this.handleInputChange('language', e.target.value)}>
+                                <option value=''>Select Framework</option>
+                                {this.blockchain === 'Ethereum' && <option value='Solidity'>Solidity</option>}
+                                {this.blockchain === 'Ethereum' && <option value='Vyper'>Vyper</option>}
+                                {this.blockchain === 'Solana' && <option value='Native (Rust)'>Native (Rust)</option>}
+                                {this.blockchain === 'Solana' && <option value='Anchor (Rust)'>Anchor (Rust)</option>}
+                                {this.blockchain === 'Solana' && <option value='Seahorse (Python)'>Seahorse (Python)</option>}
+                            </select>
+                        </label>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <input
+                                type="text"
+                                value={this.path}
+                                onChange={e => this.path = e.target.value}
+                                style={{ flex: 1, padding: '8px', fontSize: '16px' }}
+                            />
+                            <button
+                                type="button"
+                                onClick={this.openFolderDialog}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    padding: '8px',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                }}
+                            >
+                                <span className="fa fa-folder-open" style={{ fontSize: '24px', color: 'gray' }} />
+                            </button>
+                        </div>
+                        <div className='dialog-buttons'>
+                            <button
+                                type='button'
+                                onClick={() => this.doCreateContract(this.path, this.projectName)}
+                                disabled={isCreateButtonDisabled} // Disable button based on the condition
+                            >
+                                Create Project
+                            </button>
+                            <button type='button' onClick={this.toggleDialog}>Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        );
+    };
+
     protected doOpenAIChatView = () => this.commandRegistry.executeCommand('aiChat:toggle');
     protected doOpenAIChatViewEnter = (e: React.KeyboardEvent) => {
         if (this.isEnterKey(e)) {
@@ -481,32 +480,35 @@ export class GettingStartedWidget extends ReactWidget {
     /**
      * Trigger the create file command.
      */
-    protected doCreateFile = () => this.commandRegistry.executeCommand(CommonCommands.NEW_UNTITLED_FILE.id);
-    protected doCreateFileEnter = (e: React.KeyboardEvent) => {
-        if (this.isEnterKey(e)) {
-            this.doCreateFile();
-        }
-    };
+    // eslint-disable-next-line @typescript-eslint/tslint/config
+    protected async doCreateContract(targetDirectory: string, folderName: string) {
+        try {
+            await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FOLDER.id, targetDirectory, folderName);
 
-    /**
-     * Trigger the open command.
-     */
-    protected doOpen = () => this.commandRegistry.executeCommand(WorkspaceCommands.OPEN.id);
-    protected doOpenEnter = (e: React.KeyboardEvent) => {
-        if (this.isEnterKey(e)) {
-            this.doOpen();
-        }
-    };
+            const projectFolderPath = `${targetDirectory}/${folderName}`;
 
-    /**
-     * Trigger the open file command.
-     */
-    protected doOpenFile = () => this.commandRegistry.executeCommand(WorkspaceCommands.OPEN_FILE.id);
-    protected doOpenFileEnter = (e: React.KeyboardEvent) => {
-        if (this.isEnterKey(e)) {
-            this.doOpenFile();
+            const anchorToml = anchorTomlContent.replace(/{folderName}/g, folderName);
+            const cargoToml = cargoTomlContent.replace(/{folderName}/g, folderName);
+            const programRs = programRsContent.replace(/{folderName}/g, folderName);
+            const testTs = testTsContent.replace(/{folderName}/g, folderName);
+
+            if (this.blockchain === 'Solana') {
+                await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FILE.id, projectFolderPath, 'Anchor.toml', anchorToml);
+                await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FILE.id, projectFolderPath, 'Cargo.toml', cargoToml);
+                await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FOLDER.id, projectFolderPath, 'program');
+                await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FILE.id, `${projectFolderPath}/program`, `${folderName}.rs`, programRs);
+                await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FOLDER.id, projectFolderPath, 'tests');
+                await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FILE.id, `${projectFolderPath}/tests`, `${folderName}.ts`, testTs);
+
+                console.log('Solana project structure created successfully.');
+
+                await this.commandRegistry.executeCommand(WorkspaceCommands.OPEN_SMART_CONTRACT.id, projectFolderPath);
+            }
+
+        } catch (error) {
+            console.error('Error creating contract structure:', error);
         }
-    };
+    }
 
     /**
      * Trigger the open folder command.
@@ -518,13 +520,11 @@ export class GettingStartedWidget extends ReactWidget {
         }
     };
 
-    /**
-     * Trigger the open workspace command.
-     */
-    protected doOpenWorkspace = () => this.commandRegistry.executeCommand(WorkspaceCommands.OPEN_WORKSPACE.id);
-    protected doOpenWorkspaceEnter = (e: React.KeyboardEvent) => {
+    // Todo: Implement this feature
+    protected doOpenFromGit = () => this.commandRegistry.executeCommand(WorkspaceCommands.OPEN_FOLDER.id);
+    protected doOpenFromGitEnter = (e: React.KeyboardEvent) => {
         if (this.isEnterKey(e)) {
-            this.doOpenWorkspace();
+            this.doOpenFolder();
         }
     };
 
@@ -585,41 +585,52 @@ export class GettingStartedWidget extends ReactWidget {
     protected isEnterKey(e: React.KeyboardEvent): boolean {
         return Key.ENTER.keyCode === KeyCode.createKeyCode(e.nativeEvent).key?.keyCode;
     }
-}
 
-export interface PreferencesProps {
-    preferenceService: PreferenceService;
-}
-
-function WelcomePreferences(props: PreferencesProps): JSX.Element {
-    const [startupEditor, setStartupEditor] = React.useState<string>(
-        props.preferenceService.get('workbench.startupEditor', 'welcomePage')
-    );
-    React.useEffect(() => {
-        const prefListener = props.preferenceService.onPreferenceChanged(change => {
-            if (change.preferenceName === 'workbench.startupEditor') {
-                const prefValue = change.newValue;
-                setStartupEditor(prefValue);
-            }
-        });
-        return () => prefListener.dispose();
-    }, [props.preferenceService]);
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newValue = e.target.checked ? 'welcomePage' : 'none';
-        props.preferenceService.updateValue('workbench.startupEditor', newValue);
+    // Method to handle form input changes
+    protected handleInputChange = (field: 'projectName' | 'blockchain' | 'language' | 'path', value: string): void => {
+        this[field] = value;
+        this.update();
     };
-    return (
-        <div className='gs-preference'>
-            <input
-                type="checkbox"
-                className="theia-input"
-                id="startupEditor"
-                onChange={handleChange}
-                checked={startupEditor === 'welcomePage' || startupEditor === 'welcomePageInEmptyWorkbench'}
-            />
-            <label htmlFor="startupEditor">
-                {nls.localizeByDefault('Show welcome page on startup')}
-            </label>
-        </div>
-    );
+
+    // Method to toggle the dialog visibility
+    protected toggleDialog = (): void => {
+        this.isDialogOpen = !this.isDialogOpen;
+        this.update();
+    };
+    protected toggleDialogEnter = (e: React.KeyboardEvent) => {
+        if (this.isEnterKey(e)) {
+            this.toggleDialog();
+        }
+    };
+
+    // Method to create project folder
+    protected async createProject(): Promise<void> {
+        const { projectName, blockchain, language } = this;
+        console.log(`Creating project: ${projectName}, Blockchain: ${blockchain}, Language: ${language}`);
+        this.toggleDialog();
+        this.resetContractProperties();
+    }
+
+    protected resetContractProperties = (): void => {
+        this.projectName = '';
+        this.blockchain = '';
+        this.language = '';
+    };
+
+    protected openFolderDialog = async () => {
+        // Use FileDialogService to open a directory selection dialog
+        const selectedFolder = await this.fileDialogService.showOpenDialog({
+            title: 'Select a Folder',
+            canSelectFolders: true,
+            canSelectFiles: false
+        });
+
+        if (selectedFolder) {
+            console.log(selectedFolder);
+            this.path = selectedFolder.path.toString().slice(1);
+            console.log(this.path);
+            this.update(); // Re-render the component with the new path
+        }
+    };
+
 }

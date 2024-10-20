@@ -40,7 +40,7 @@ export const GettingStartedPreferenceSchema: PreferenceSchema = {
                 nls.localizeByDefault('Open a new untitled text file (only applies when opening an empty window).'),
                 nls.localizeByDefault('Open the Welcome page when opening an empty workbench.'),
             ],
-            default: 'welcomePage',
+            default: 'none',
             description: nls.localizeByDefault('Controls which editor is shown at startup, if none are restored from the previous session.')
         },
     }

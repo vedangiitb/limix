@@ -301,6 +301,13 @@ export namespace CommonCommands {
         category: CREATE_CATEGORY,
         label: 'New File...'
     });
+
+    export const NEW_FOLDER = Command.toDefaultLocalizedCommand({
+        id: 'file.newFolder',
+        category: CREATE_CATEGORY,
+        label: 'New Smart Contract'
+    });
+
     export const SAVE = Command.toDefaultLocalizedCommand({
         id: 'core.save',
         category: FILE_CATEGORY,

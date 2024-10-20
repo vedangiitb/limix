@@ -39,6 +39,8 @@ import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { FileStat } from '@theia/filesystem/lib/common/files';
 import { nls } from '@theia/core/lib/common/nls';
 import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
+// import { BinaryBuffer } from '@theia/core/lib/common/buffer';
+import { DidCreateNewResourceEvent } from './workspace-frontend-contribution';
 
 const validFilename: (arg: string) => boolean = require('valid-filename');
 
@@ -70,6 +72,10 @@ export namespace WorkspaceCommands {
         id: 'workspace:openFolder',
         dialogLabel: nls.localizeByDefault('Open Folder') // No `label`. Otherwise, it shows up in the `Command Palette`.
     };
+    export const OPEN_SMART_CONTRACT: Command & { dialogLabel: string } = {
+        id: 'workspace:openSmartContract',
+        dialogLabel: nls.localizeByDefault('Open Folder') // No `label`. Otherwise, it shows up in the `Command Palette`.
+    };
     export const OPEN_WORKSPACE: Command & { dialogLabel: string } = {
         ...Command.toDefaultLocalizedCommand({
             id: 'workspace:openWorkspace',
@@ -97,6 +103,16 @@ export namespace WorkspaceCommands {
         id: 'file.newFolder',
         category: FILE_CATEGORY,
         label: 'New Folder...'
+    });
+    export const NEW_CONTRACT_FOLDER = Command.toDefaultLocalizedCommand({
+        id: 'file.newContractFolder',
+        category: FILE_CATEGORY,
+        label: 'New Contract...'
+    });
+    export const NEW_CONTRACT_FILE = Command.toDefaultLocalizedCommand({
+        id: 'file.newContractFile',
+        category: FILE_CATEGORY,
+        label: 'New Contract File...'
     });
     /** @deprecated Use the `OpenWithService` instead */
     export const FILE_OPEN_WITH = (opener: OpenHandler): Command => ({
@@ -183,11 +199,6 @@ export class EditMenuContribution implements MenuContribution {
 
 }
 
-export interface DidCreateNewResourceEvent {
-    uri: URI
-    parent: URI
-}
-
 @injectable()
 export class WorkspaceCommandContribution implements CommandContribution {
 
@@ -253,30 +264,7 @@ export class WorkspaceCommandContribution implements CommandContribution {
                 }
             })
         }));
-        registry.registerCommand(WorkspaceCommands.NEW_FOLDER, this.newWorkspaceRootUriAwareCommandHandler({
-            execute: uri => this.getDirectory(uri).then(parent => {
-                if (parent) {
-                    const parentUri = parent.resource;
-                    const targetUri = parentUri.resolve('Untitled');
-                    const vacantChildUri = FileSystemUtils.generateUniqueResourceURI(parent, targetUri, true);
-                    const dialog = new WorkspaceInputDialog({
-                        title: nls.localizeByDefault('New Folder...'),
-                        maxWidth: 400,
-                        parentUri: parentUri,
-                        initialValue: vacantChildUri.path.base,
-                        placeholder: nls.localize('theia/workspace/newFolderPlaceholder', 'Folder Name'),
-                        validate: name => this.validateFileName(name, parent, true)
-                    }, this.labelProvider);
-                    dialog.open().then(async name => {
-                        if (name) {
-                            const folderUri = parentUri.resolve(name);
-                            await this.fileService.createFolder(folderUri);
-                            this.fireCreateNewFile({ parent: parentUri, uri: folderUri });
-                        }
-                    });
-                }
-            })
-        }));
+
         registry.registerCommand(WorkspaceCommands.FILE_RENAME, this.newMultiUriAwareCommandHandler({
             isEnabled: uris => uris.some(uri => !this.isWorkspaceRoot(uri)) && uris.length === 1,
             isVisible: uris => uris.some(uri => !this.isWorkspaceRoot(uri)) && uris.length === 1,

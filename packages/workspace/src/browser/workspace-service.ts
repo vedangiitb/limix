@@ -35,7 +35,6 @@ import { FileSystemPreferences } from '@theia/filesystem/lib/browser';
 import { workspaceSchema, WorkspaceSchemaUpdater } from './workspace-schema-updater';
 import { IJSONSchema } from '@theia/core/lib/common/json-schema';
 import { StopReason } from '@theia/core/lib/common/frontend-application-state';
-
 /**
  * The workspace service.
  */
@@ -111,6 +110,7 @@ export class WorkspaceService implements FrontendApplicationContribution {
             if (this._workspace && this._workspace.isFile && event.contains(this._workspace.resource)) {
                 this.updateWorkspace();
             }
+            // this.messageService.info('Hello World!');
         });
         this.fsPreferences.onPreferenceChanged(event => {
             if (event.preferenceName === 'files.watcherExclude') {

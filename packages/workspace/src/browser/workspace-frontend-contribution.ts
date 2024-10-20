@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/tslint/config */
 // *****************************************************************************
 // Copyright (C) 2017 TypeFox and others.
 //
@@ -15,11 +16,13 @@
 // *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
-import { CommandContribution, CommandRegistry, MenuContribution, MenuModelRegistry, MessageService, isWindows, MaybeArray } from '@theia/core/lib/common';
+import { CommandContribution, CommandRegistry, MenuContribution, MenuModelRegistry, MessageService, isWindows, MaybeArray, SelectionService, Emitter, OS }
+    from '@theia/core/lib/common';
 import { isOSX, environment } from '@theia/core';
 import {
     open, OpenerService, CommonMenus, KeybindingRegistry, KeybindingContribution,
-    FrontendApplicationContribution, SHELL_TABBAR_CONTEXT_COPY, OnWillStopAction, Navigatable, SaveableSource, Widget
+    FrontendApplicationContribution, SHELL_TABBAR_CONTEXT_COPY, OnWillStopAction, Navigatable, SaveableSource, Widget,
+    LabelProvider
 } from '@theia/core/lib/browser';
 import { FileDialogService, OpenFileDialogProps, FileDialogTreeFilters } from '@theia/filesystem/lib/browser';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
@@ -39,6 +42,10 @@ import { FileStat } from '@theia/filesystem/lib/common/files';
 import { UntitledWorkspaceExitDialog } from './untitled-workspace-exit-dialog';
 import { FilesystemSaveableService } from '@theia/filesystem/lib/browser/filesystem-saveable-service';
 import { StopReason } from '@theia/core/lib/common/frontend-application-state';
+import { FileSystemUtils } from '@theia/filesystem/lib/common';
+import { WorkspaceInputDialog } from './workspace-input-dialog';
+
+const validFilename: (arg: string) => boolean = require('valid-filename');
 
 export enum WorkspaceStates {
     /**
@@ -60,6 +67,11 @@ export type WorkbenchState = keyof typeof WorkspaceStates;
 /** Create the workspace section after open {@link CommonMenus.FILE_OPEN}. */
 export const FILE_WORKSPACE = [...CommonMenus.FILE, '2_workspace'];
 
+export interface DidCreateNewResourceEvent {
+    uri: URI
+    parent: URI
+}
+
 @injectable()
 export class WorkspaceFrontendContribution implements CommandContribution, KeybindingContribution, MenuContribution, FrontendApplicationContribution {
 
@@ -74,6 +86,10 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
     @inject(PreferenceConfigurations) protected readonly preferenceConfigurations: PreferenceConfigurations;
     @inject(FilesystemSaveableService) protected readonly saveService: FilesystemSaveableService;
     @inject(WorkspaceFileService) protected readonly workspaceFileService: WorkspaceFileService;
+    @inject(SelectionService) protected readonly selectionService: SelectionService;
+    @inject(LabelProvider) protected readonly labelProvider: LabelProvider;
+
+    private readonly onDidCreateNewFileEmitter = new Emitter<DidCreateNewResourceEvent>();
 
     configure(): void {
         const workspaceExtensions = this.workspaceFileService.getWorkspaceFileExtensions();
@@ -125,7 +141,150 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         }
     }
 
+    protected async validateFileRename(oldName: string, newName: string, parent: FileStat): Promise<string> {
+        if (OS.backend.isWindows && parent.resource.resolve(newName).isEqual(parent.resource.resolve(oldName), false)) {
+            return '';
+        }
+        return this.validateFileName(newName, parent, false);
+    }
+
+    /**
+ * Returns an error message if the file name is invalid. Otherwise, an empty string.
+ *
+ * @param name the simple file name of the file to validate.
+ * @param parent the parent directory's file stat.
+ * @param allowNested allow file or folder creation using recursive path
+ */
+    protected async validateFileName(name: string, parent: FileStat, allowNested: boolean = false): Promise<string> {
+        if (!name) {
+            return '';
+        }
+        // do not allow recursive rename
+        if (!allowNested && !validFilename(name)) {
+            return nls.localizeByDefault('The name **{0}** is not valid as a file or folder name. Please choose a different name.');
+        }
+        if (name.startsWith('/')) {
+            return nls.localizeByDefault('A file or folder name cannot start with a slash.');
+        } else if (name.startsWith(' ') || name.endsWith(' ')) {
+            return nls.localizeByDefault('Leading or trailing whitespace detected in file or folder name.');
+        }
+        // check and validate each sub-paths
+        if (name.split(/[\\/]/).some(file => !file || !validFilename(file) || /^\s+$/.test(file))) {
+            return nls.localizeByDefault('\'{0}\' is not a valid file name', this.trimFileName(name));
+        }
+        const childUri = parent.resource.resolve(name);
+        const exists = await this.fileService.exists(childUri);
+        if (exists) {
+            return nls.localizeByDefault('A file or folder **{0}** already exists at this location. Please choose a different name.', this.trimFileName(name));
+        }
+        return '';
+    }
+
+    protected trimFileName(name: string): string {
+        if (name && name.length > 30) {
+            return `${name.substring(0, 30)}...`;
+        }
+        return name;
+    }
+
+    protected fireCreateNewFile(uri: DidCreateNewResourceEvent): void {
+        this.onDidCreateNewFileEmitter.fire(uri);
+    }
+
     registerCommands(commands: CommandRegistry): void {
+        commands.registerCommand(WorkspaceCommands.NEW_FOLDER, {
+            isEnabled: () => true,
+            isVisible: () => true,
+            execute: uri => this.getDirectory(uri).then(parent => {
+                if (parent) {
+                    const parentUri = parent.resource;
+                    const targetUri = parentUri.resolve('Untitled');
+                    const vacantChildUri = FileSystemUtils.generateUniqueResourceURI(parent, targetUri, true);
+                    const dialog = new WorkspaceInputDialog({
+                        title: nls.localizeByDefault('New Folder...'),
+                        maxWidth: 400,
+                        parentUri: parentUri,
+                        initialValue: vacantChildUri.path.base,
+                        placeholder: nls.localize('theia/workspace/newFolderPlaceholder', 'Folder Name'),
+                        validate: name => this.validateFileName(name, parent, true)
+                    }, this.labelProvider);
+                    dialog.open().then(async name => {
+                        if (name) {
+                            const folderUri = parentUri.resolve(name);
+                            await this.fileService.createFolder(folderUri);
+                            this.fireCreateNewFile({ parent: parentUri, uri: folderUri });
+                        }
+                    });
+                }
+            })
+        });
+
+        commands.registerCommand(WorkspaceCommands.NEW_CONTRACT_FOLDER, {
+            isEnabled: () => true,
+            isVisible: () => true,
+            execute: async (targetDirectory, folderName, uri) => {
+                try {
+                    // Ensure correct URI format for the parent directory
+                    const parentUri = targetDirectory ? new URI(`file:///${encodeURIComponent(targetDirectory.replace(/\\/g, '/'))}`) : uri;
+
+                    const parent = await this.getDirectory(parentUri);
+
+                    if (parent) {
+                        const folderUri = parent.resource.resolve(folderName || 'Untitled');
+
+                        console.log('folderUri ->', folderUri.toString());
+
+                        await this.fileService.createFolder(folderUri);
+                        this.fireCreateNewFile({ parent: parentUri, uri: folderUri });
+
+                        console.log('Folder successfully created at:', folderUri.toString());
+                    } else {
+                        console.warn('Parent directory could not be found or is invalid.');
+                    }
+                } catch (error) {
+                    console.error('Error creating folder:', error);
+                }
+            }
+        });
+
+        commands.registerCommand(WorkspaceCommands.NEW_CONTRACT_FILE, {
+            isEnabled: () => true,
+            isVisible: () => true,
+            execute: async (targetDirectory, fileName, content, uri) => {
+                try {
+                    // Ensure correct URI format for the target directory
+                    const parentUri = targetDirectory ? new URI(`file:///${encodeURIComponent(targetDirectory.replace(/\\/g, '/'))}`) : uri;
+
+                    // Debug output to ensure URIs are correct
+                    console.log('targetDirectory ->', targetDirectory);
+                    console.log('parentUri ->', parentUri.toString());
+                    console.log('fileName ->', fileName);
+
+                    const parent = await this.getDirectory(parentUri);
+
+                    if (parent) {
+                        const fileUri = parent.resource.resolve(fileName); // Resolve the file URI based on the provided fileName
+
+                        // More debug output to ensure fileUri is correctly set
+                        console.log('fileUri ->', fileUri.toString());
+
+                        // Create a BinaryBuffer for the file content
+                        const contentBuffer = BinaryBuffer.fromString(content); // Empty content for the new file
+
+                        // Directly create the file with the content buffer
+                        await this.fileService.createFile(fileUri, contentBuffer);
+                        this.fireCreateNewFile({ parent: parentUri, uri: fileUri });
+
+                        console.log('File successfully created at:', fileUri.toString());
+                    } else {
+                        console.warn('Parent directory could not be found or is invalid.');
+                    }
+                } catch (error) {
+                    console.error('Error creating file:', error);
+                }
+            }
+        });
+
         // Not visible/enabled on Windows/Linux in electron.
         commands.registerCommand(WorkspaceCommands.OPEN, {
             isEnabled: () => isOSX || !this.isElectron(),
@@ -141,6 +300,10 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         commands.registerCommand(WorkspaceCommands.OPEN_FOLDER, {
             isEnabled: () => true,
             execute: () => this.doOpenFolder()
+        });
+        commands.registerCommand(WorkspaceCommands.OPEN_SMART_CONTRACT, {
+            isEnabled: () => true,
+            execute: (folderLink: string) => this.doOpenSmartContract(folderLink)
         });
         commands.registerCommand(WorkspaceCommands.OPEN_WORKSPACE, {
             isEnabled: () => true,
@@ -167,6 +330,25 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
             }
 
         });
+    }
+
+    protected async getDirectory(candidate: URI): Promise<FileStat | undefined> {
+        let stat: FileStat | undefined;
+        try {
+            stat = await this.fileService.resolve(candidate);
+        } catch { }
+        if (stat && stat.isDirectory) {
+            return stat;
+        }
+        return this.getParent(candidate);
+    }
+
+    protected async getParent(candidate: URI): Promise<FileStat | undefined> {
+        try {
+            return await this.fileService.resolve(candidate.parent);
+        } catch {
+            return undefined;
+        }
     }
 
     registerMenus(menus: MenuModelRegistry): void {
@@ -346,14 +528,34 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         };
         const [rootStat] = await this.workspaceService.roots;
         const targetFolders = await this.fileDialogService.showOpenDialog(props, rootStat);
+        console.log(targetFolders);
         if (targetFolders) {
             const openableUri = await this.getOpenableWorkspaceUri(targetFolders);
+            console.log(openableUri);
             if (openableUri) {
                 if (!this.workspaceService.workspace || !openableUri.isEqual(this.workspaceService.workspace.resource)) {
                     this.workspaceService.open(openableUri);
                     return openableUri;
                 }
             };
+        }
+        return undefined;
+    }
+
+    protected async doOpenSmartContract(folderLink: string): Promise<URI | undefined> {
+        // Convert folderLink to a URI object
+        const targetFolderUri = new URI(`file:///${encodeURIComponent(folderLink.replace(/\\/g, '/'))}`);
+        console.log(targetFolderUri);
+
+        // Wrap the URI in an array to match the expected input type of getOpenableWorkspaceUri
+        const openableUri = await this.getOpenableWorkspaceUri([targetFolderUri]);
+        console.log(openableUri);
+
+        if (openableUri) {
+            if (!this.workspaceService.workspace || !openableUri.isEqual(this.workspaceService.workspace.resource)) {
+                this.workspaceService.open(openableUri);
+                return openableUri;
+            }
         }
         return undefined;
     }

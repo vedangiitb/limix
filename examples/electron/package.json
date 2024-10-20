@@ -9,7 +9,7 @@
     "target": "electron",
     "frontend": {
       "config": {
-        "applicationName": "Theia Electron Example",
+        "applicationName": "Limix AI",
         "reloadOnReconnect": true,
         "electron": {
           "splashScreenOptions": {
