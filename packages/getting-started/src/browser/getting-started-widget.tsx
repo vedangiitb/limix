@@ -13,7 +13,6 @@
 //
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
-
 import { codicon, CommonCommands, Key, KeyCode, LabelProvider, Message, ReactWidget } from '@theia/core/lib/browser';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
@@ -85,7 +84,10 @@ export class GettingStartedWidget extends ReactWidget {
     protected blockchain: string = '';
     protected language: string = '';
     protected isDialogOpen: boolean = false;
+    protected isAiCreation: boolean = false;
     protected path: string = 'C:';
+    protected aiPrompt: string = '';
+    protected isCreating: boolean = false;
 
     @inject(ApplicationServer)
     protected readonly appServer: ApplicationServer;
@@ -194,6 +196,17 @@ export class GettingStartedWidget extends ReactWidget {
     protected renderStart(): React.ReactNode {
         const requireSingleOpen = isOSX || !environment.electron.is();
 
+        const createProjectAI = <div className='gs-action-container'>
+            <a
+                role={'button'}
+                tabIndex={0}
+                onClick={this.toggleDialogAI}
+                onKeyDown={this.toggleDialogEnterAI}>
+                {/* {CommonCommands.NEW_UNTITLED_FILE.label ?? nls.localizeByDefault('New File...')} */}
+                Generate Smart Contract with AI
+            </a>
+        </div>;
+
         const createProject = <div className='gs-action-container'>
             <a
                 role={'button'}
@@ -227,6 +240,7 @@ export class GettingStartedWidget extends ReactWidget {
 
         return <div className='gs-section'>
             <h3 className='gs-section-header'><i className={codicon('folder-opened')}></i>{nls.localizeByDefault('Start')}</h3>
+            {createProjectAI}
             {createProject}
             {openFolder}
             {importFromGit}
@@ -438,13 +452,38 @@ export class GettingStartedWidget extends ReactWidget {
                                 <span className="fa fa-folder-open" style={{ fontSize: '24px', color: 'gray' }} />
                             </button>
                         </div>
+                        {this.isAiCreation && (
+                            <textarea
+                                style={{
+                                    width: '100%',
+                                    height: '150px',
+                                    padding: '10px',
+                                    border: '2px solid #ccc',
+                                    borderRadius: '8px',
+                                    fontSize: '16px',
+                                    fontFamily: 'Arial, sans-serif',
+                                    resize: 'vertical',
+                                    outline: 'none',
+                                    backgroundColor: '#f9f9f9',
+                                    color: '#333',
+                                    boxShadow: '0px 4px 6px rgba(0, 0, 0, 0.1)',
+                                    transition: 'border-color 0.3s ease-in-out',
+                                }}
+                                value={this.aiPrompt}
+                                onChange={e => this.handleInputChange('aiPrompt', e.target.value)}
+                                placeholder="Type your message here..."
+                                onFocus={e => (e.target.style.borderColor = '#6c63ff')}
+                                onBlur={e => (e.target.style.borderColor = '#ccc')}
+                            />
+                        )}
+
                         <div className='dialog-buttons'>
                             <button
                                 type='button'
-                                onClick={() => this.doCreateContract(this.path, this.projectName)}
+                                onClick={async () => this.doCreateContract(this.path, this.projectName, await this.getContent())}
                                 disabled={isCreateButtonDisabled} // Disable button based on the condition
                             >
-                                Create Project
+                                {this.isCreating ? 'Creating....' : 'Create Project'}
                             </button>
                             <button type='button' onClick={this.toggleDialog}>Cancel</button>
                         </div>
@@ -452,6 +491,87 @@ export class GettingStartedWidget extends ReactWidget {
                 </div>
             </div>
         );
+    };
+
+    protected getContent = async () => {
+        this.isCreating = true;
+        // Check if AI creation is enabled
+        if (this.isAiCreation) {
+            console.log('AI Prompt:', this.aiPrompt);
+            const aiGeneratedContent = await this.getGeneratedContent(this.aiPrompt);
+            // Use the AI-generated content, falling back to default content if necessary
+            return [
+                aiGeneratedContent.anchorTomlContent || anchorTomlContent,
+                aiGeneratedContent.cargoTomlContent || cargoTomlContent,
+                aiGeneratedContent.programRsContent || programRsContent,
+                aiGeneratedContent.testTsContent || testTsContent
+            ];
+        } else {
+            // Return the default content if AI creation is not enabled
+            return [anchorTomlContent, cargoTomlContent, programRsContent, testTsContent];
+        }
+    };
+
+    protected getGeneratedContent = async (userPrompt: string) => {
+        const prompt = `
+You are an AI assistant specialized in generating Solana smart contracts.
+        Based on the user's input, provide a comprehensive and well-structured response that includes the following components:
+        
+        1. **Anchor TOML Content**: Define the configuration for the Anchor framework, including the workspace and dependencies.
+        2. **Cargo TOML Content**: Specify the Rust package configuration for building the smart contract, including the necessary libraries and features.
+        3. **Program.rs Content**: Write the Rust code for the smart contract itself, ensuring to implement the core functionalities as per the user's request.
+        4. **Test.ts Content**: Create a TypeScript test file that outlines the testing framework and includes sample tests to validate the contract's functionality.
+
+        **User Input**:${userPrompt}
+
+        Please ensure the code is well-commented and follows best practices for Solana smart contract development. Pleaes return the response in json format only and do not
+        include any explanations. Also please have your response such that it will be easier to parse it to json.
+
+         Here is the expected output format 
+         { 'anchorTomlContent': 'your anchor TOML content here', 
+          'cargoTomlContent': 'your cargo TOML content here',
+          'programRsContent': 'your Rust program.rs content here',
+          'testTsContent': 'your test.ts content here'}
+        `;
+
+        const requestBody = {
+            requestType: 'req',
+            model: 'gpt-4o-mini',
+            chat: prompt
+        };
+
+        const response = await fetch('https://cha8l8nzd9.execute-api.us-east-1.amazonaws.com/dev/get-response', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+        });
+
+        const responseData = await response.json();
+
+        const content = responseData.choices[0].message.content;
+
+        try {
+            const parsedContent = JSON.parse(content);
+
+            return {
+                anchorTomlContent: parsedContent.anchorTomlContent || '',
+                cargoTomlContent: parsedContent.cargoTomlContent || '',
+                programRsContent: parsedContent.programRsContent || '',
+                testTsContent: parsedContent.testTsContent || ''
+            };
+
+        } catch (jsonError) {
+            console.log('JSON Parse Error:', jsonError);
+            return {
+                anchorTomlContent: '',
+                cargoTomlContent: '',
+                programRsContent: '',
+                testTsContent: ''
+            };
+        }
+
     };
 
     protected doOpenAIChatView = () => this.commandRegistry.executeCommand('aiChat:toggle');
@@ -481,16 +601,17 @@ export class GettingStartedWidget extends ReactWidget {
      * Trigger the create file command.
      */
     // eslint-disable-next-line @typescript-eslint/tslint/config
-    protected async doCreateContract(targetDirectory: string, folderName: string) {
+    protected async doCreateContract(targetDirectory: string, folderName: string, content: Array<string>) {
+        this.aiPrompt = '';
         try {
             await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FOLDER.id, targetDirectory, folderName);
 
             const projectFolderPath = `${targetDirectory}/${folderName}`;
 
-            const anchorToml = anchorTomlContent.replace(/{folderName}/g, folderName);
-            const cargoToml = cargoTomlContent.replace(/{folderName}/g, folderName);
-            const programRs = programRsContent.replace(/{folderName}/g, folderName);
-            const testTs = testTsContent.replace(/{folderName}/g, folderName);
+            const anchorToml = content[0].replace(/{folderName}/g, folderName);
+            const cargoToml = content[1].replace(/{folderName}/g, folderName);
+            const programRs = content[2].replace(/{folderName}/g, folderName);
+            const testTs = content[3].replace(/{folderName}/g, folderName);
 
             if (this.blockchain === 'Solana') {
                 await this.commandRegistry.executeCommand(WorkspaceCommands.NEW_CONTRACT_FILE.id, projectFolderPath, 'Anchor.toml', anchorToml);
@@ -505,8 +626,8 @@ export class GettingStartedWidget extends ReactWidget {
                 await this.commandRegistry.executeCommand(WorkspaceCommands.OPEN_SMART_CONTRACT.id, projectFolderPath);
             }
 
-        } catch (error) {
-            console.error('Error creating contract structure:', error);
+        } catch (err) {
+            console.error('Error creating contract structure:', err);
         }
     }
 
@@ -587,19 +708,31 @@ export class GettingStartedWidget extends ReactWidget {
     }
 
     // Method to handle form input changes
-    protected handleInputChange = (field: 'projectName' | 'blockchain' | 'language' | 'path', value: string): void => {
+    protected handleInputChange = (field: 'projectName' | 'blockchain' | 'language' | 'path' | 'aiPrompt', value: string): void => {
         this[field] = value;
         this.update();
     };
 
     // Method to toggle the dialog visibility
     protected toggleDialog = (): void => {
+        this.isAiCreation = false;
         this.isDialogOpen = !this.isDialogOpen;
         this.update();
     };
+    protected toggleDialogAI = (): void => {
+        this.isDialogOpen = !this.isDialogOpen;
+        this.isAiCreation = true;
+        this.update();
+    };
+
     protected toggleDialogEnter = (e: React.KeyboardEvent) => {
         if (this.isEnterKey(e)) {
             this.toggleDialog();
+        }
+    };
+    protected toggleDialogEnterAI = (e: React.KeyboardEvent) => {
+        if (this.isEnterKey(e)) {
+            this.toggleDialogAI();
         }
     };
 
